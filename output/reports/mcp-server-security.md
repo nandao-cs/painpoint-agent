@@ -1,6 +1,6 @@
 # The explosion of MCP servers creates an unmanaged supply-chain/risk surface with no standard way to vet them.
 
-**Score:** 37.1/100  |  **Domain:** cloud  |  **Sources:** 1  |  **Evidence:** 2
+**Score:** 37.0/100  |  **Domain:** cloud  |  **Sources:** 1  |  **Evidence:** 2
 
 ## Why it's strong
 - Breadth: 1 independent sources, 2 evidence items
