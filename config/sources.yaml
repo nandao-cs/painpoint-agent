@@ -1,15 +1,6 @@
 # Each source needs an access method. Reddit/StackExchange/HN have APIs —
 # prefer those over HTML scraping. Read each ToS before enabling.
 sources:
-  - name: reddit
-    method: api            # use PRAW
-    enabled: false         # set true once REDDIT_* creds are in .env
-    subreddits: [sysadmin, cybersecurity, netsec, msp, ITManagers,
-                 AskNetsec, devops, homelab, BlueTeamSec]
-    rate_limit_per_min: 60
-    posts_per_subreddit: 80
-    comments_per_post: 30
-
   - name: hackernews
     method: api            # Algolia HN search API, public (no auth)
     enabled: true
@@ -18,21 +9,61 @@ sources:
     hits_per_query: 50
 
   - name: stackexchange
-    method: api            # Security.SE, ServerFault, SuperUser (public, optional key)
+    method: api            # Security.SE, ServerFault, SuperUser, DevOps, SRE, DBA (public, optional key)
     enabled: true
-    sites: [security, serverfault, superuser]
+    sites: [security, serverfault, superuser, devops, dba]   # 'sre' has no API slug
     questions_per_site: 80
-    tags: [intrusion-detection, vulnerability, monitoring, active-directory,
-           firewalls, logging, backup, email]
+    # tag set trimmed to stay under the keyless SE throttle (~one burst). Add
+    # STACKEXCHANGE_KEY to .env to lift the quota and re-expand.
+    tags: [vulnerability, monitoring, active-directory, firewalls,
+           logging, backup, kubernetes, secrets-management]
+
+  - name: lobsters
+    method: api            # lobste.rs public JSON, no auth — high-signal infra/security crowd
+    enabled: true
+    tags: [security, privacy, devops, networking, cryptography]   # 'ops' is not a lobsters tag
+    posts_per_tag: 60
+
+  - name: github
+    method: api            # issues/feature-requests on popular security & devops OSS = explicit unmet need
+    enabled: true
+    repos: [wazuh/wazuh, aquasecurity/trivy, falcosecurity/falco,
+            open-policy-agent/opa, hashicorp/vault, semgrep/semgrep,
+            projectdiscovery/nuclei, crowdsecurity/crowdsec, OISF/suricata,
+            zaproxy/zaproxy, TheHive-Project/TheHive, Velocidex/velociraptor,
+            grafana/loki, prometheus/prometheus, elastic/detection-rules]
+    labels: [enhancement]   # plus most-commented open issues per repo
+    issues_per_repo: 40
+    # optional: set GITHUB_TOKEN in .env to lift rate limit 60->5000/hr
+
+  - name: discourse
+    method: api            # Discourse forums expose /latest.json publicly — vendor support pain
+    enabled: true
+    forums: [https://discuss.elastic.co, https://discuss.hashicorp.com,
+             https://community.grafana.com]   # cloudflare 403s unauth; grafana allows it
+    topics_per_forum: 60
+
+  - name: mastodon
+    method: api            # DISABLED: infosec.exchange now 422s unauthenticated tag timelines.
+    enabled: false         # needs a Mastodon app access token to re-enable (set MASTODON_TOKEN).
+    instance: https://infosec.exchange
+    tags: [infosec, cybersecurity, sysadmin, devops, threatintel]
+    posts_per_tag: 40
+
+  - name: reddit
+    method: api            # use PRAW — disabled: no script-app creds (account couldn't create one)
+    enabled: false
+    subreddits: [sysadmin, cybersecurity, netsec, msp, ITManagers,
+                 AskNetsec, devops, homelab, BlueTeamSec]
+    rate_limit_per_min: 60
+    posts_per_subreddit: 80
+    comments_per_post: 30
 
   - name: spiceworks
-    method: scrape         # respect robots.txt
+    method: scrape         # respect robots.txt — not yet implemented
     enabled: false
     rate_limit_per_min: 10
 
-  - name: lobsters
-    method: scrape
-    enabled: false
-
-# Add: Gartner Peer Insights, G2 reviews (1-2 star = pain gold),
-#      vendor subreddits, Discord/Slack exports if you have access.
+# Gated/anti-scraping, manual pulls only (willingness-to-pay gold):
+#   Gartner Peer Insights, G2 / TrustRadius reviews (1-2 star = pain),
+#   private Slack/Discord exports if you have access.

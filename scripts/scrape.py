@@ -144,9 +144,114 @@ def scrape_reddit(con, cfg, env):
         time.sleep(1)
     con.commit(); print(f"  reddit: +{n} new posts")
 
+# ---------------- Lobsters (public JSON API, no auth) ----------------
+def scrape_lobsters(con, cfg, env):
+    n = 0; per = cfg.get("posts_per_tag", 60)
+    for tag in cfg.get("tags", ["security"]):
+        try:
+            r = requests.get(f"https://lobste.rs/t/{tag}.json",
+                             headers={"User-Agent": UA}, timeout=30)
+            r.raise_for_status(); data = r.json()
+        except Exception as e:
+            print(f"  ! lobsters {tag}: {e}"); continue
+        cache("lobsters", tag, data)
+        for p in (data or [])[:per]:
+            sub = p.get("submitter_user")
+            author = sub.get("username") if isinstance(sub, dict) else sub
+            n += upsert_post(con, "lobsters", p.get("short_id_url") or p.get("url"),
+                             author, p.get("created_at"), p.get("title", ""),
+                             p.get("description") or p.get("title", ""),
+                             p.get("score", 0), p.get("comment_count", 0),
+                             ["lobsters", tag] + (p.get("tags") or []))
+        time.sleep(0.6)
+    con.commit(); print(f"  lobsters: +{n} new posts")
+
+# ---------------- GitHub Issues (public API; optional token for higher limit) ----------------
+def scrape_github(con, cfg, env):
+    token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
+    h = {"User-Agent": UA, "Accept": "application/vnd.github+json"}
+    if token: h["Authorization"] = f"Bearer {token}"
+    n = 0; per = cfg.get("issues_per_repo", 40)
+    labels = cfg.get("labels", ["enhancement"])
+    for repo in cfg.get("repos", []):
+        pulls = [{"state": "open", "sort": "comments", "direction": "desc", "per_page": min(per, 100)}]
+        for lab in labels:
+            pulls.append({"state": "all", "labels": lab, "sort": "comments",
+                          "direction": "desc", "per_page": min(per, 100)})
+        for params in pulls:
+            try:
+                r = requests.get(f"https://api.github.com/repos/{repo}/issues",
+                                 params=params, headers=h, timeout=30)
+                if r.status_code == 403 and "rate limit" in r.text.lower():
+                    print("  ! github: rate limited (add GITHUB_TOKEN to .env for 5000/hr)")
+                    con.commit(); print(f"  github: +{n} new posts"); return
+                r.raise_for_status(); data = r.json()
+            except Exception as e:
+                print(f"  ! github {repo}/{params.get('labels', 'top')}: {e}"); continue
+            if not isinstance(data, list): continue
+            cache("github", f"{repo.replace('/', '_')}_{params.get('labels', 'top')}", data)
+            for it in data:
+                if it.get("pull_request"): continue  # issues only, skip PRs
+                reacts = it.get("reactions") or {}
+                n += upsert_post(con, "github", it.get("html_url"),
+                                 (it.get("user") or {}).get("login"),
+                                 it.get("created_at"), it.get("title", ""),
+                                 it.get("body") or it.get("title", ""),
+                                 reacts.get("total_count", 0), it.get("comments", 0),
+                                 ["github", repo] + [l.get("name") for l in (it.get("labels") or [])
+                                                     if isinstance(l, dict)])
+            time.sleep(0.8)
+    con.commit(); print(f"  github: +{n} new posts")
+
+# ---------------- Discourse forums (public latest.json, no auth) ----------------
+def scrape_discourse(con, cfg, env):
+    n = 0; per = cfg.get("topics_per_forum", 60)
+    for forum in cfg.get("forums", []):
+        base = forum.rstrip("/")
+        try:
+            r = requests.get(f"{base}/latest.json", headers={"User-Agent": UA}, timeout=30)
+            r.raise_for_status(); data = r.json()
+        except Exception as e:
+            print(f"  ! discourse {base}: {e}"); continue
+        host = base.split("//")[-1]
+        cache("discourse", host.replace("/", "_"), data)
+        for t in ((data.get("topic_list") or {}).get("topics") or [])[:per]:
+            url = f"{base}/t/{t.get('slug')}/{t.get('id')}"
+            n += upsert_post(con, "discourse", url, None, t.get("created_at"),
+                             t.get("title", ""), t.get("excerpt") or t.get("title", ""),
+                             t.get("like_count", 0) or 0, t.get("posts_count", 0) or 0,
+                             ["discourse", host])
+        time.sleep(0.6)
+    con.commit(); print(f"  discourse: +{n} new posts")
+
+# ---------------- Mastodon hashtag timelines (public, no auth) ----------------
+def scrape_mastodon(con, cfg, env):
+    import re as _re
+    n = 0; per = cfg.get("posts_per_tag", 40)
+    instance = cfg.get("instance", "https://infosec.exchange").rstrip("/")
+    strip = lambda s: _re.sub("<[^>]+>", " ", s or "").strip()
+    for tag in cfg.get("tags", ["infosec"]):
+        try:
+            r = requests.get(f"{instance}/api/v1/timelines/tag/{tag}",
+                             params={"limit": min(per, 40)},
+                             headers={"User-Agent": UA}, timeout=30)
+            r.raise_for_status(); data = r.json()
+        except Exception as e:
+            print(f"  ! mastodon {tag}: {e}"); continue
+        cache("mastodon", tag, data)
+        for s in (data or []):
+            content = strip(s.get("content"))
+            n += upsert_post(con, "mastodon", s.get("url") or s.get("uri"),
+                             (s.get("account") or {}).get("acct"), s.get("created_at"),
+                             content[:120], content,
+                             s.get("favourites_count", 0) or 0,
+                             s.get("replies_count", 0) or 0, ["mastodon", tag])
+        time.sleep(0.6)
+    con.commit(); print(f"  mastodon: +{n} new posts")
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", help="reddit|hackernews|stackexchange (default: all enabled)")
+    ap.add_argument("--source", help="reddit|hackernews|stackexchange|lobsters|github|discourse|mastodon (default: all enabled)")
     ap.add_argument("--limit", type=int, help="override per-source fetch size")
     args = ap.parse_args()
     if not DB.exists():
@@ -154,7 +259,15 @@ def main():
     cfg = yaml.safe_load(CFG.read_text(encoding="utf-8"))
     env = load_env()
     con = db()
-    handlers = {"hackernews": scrape_hn, "stackexchange": scrape_se, "reddit": scrape_reddit}
+    handlers = {
+        "hackernews":    lambda con, s, env: scrape_hn(con, s),
+        "stackexchange": scrape_se,
+        "reddit":        scrape_reddit,
+        "lobsters":      scrape_lobsters,
+        "github":        scrape_github,
+        "discourse":     scrape_discourse,
+        "mastodon":      scrape_mastodon,
+    }
     for s in cfg["sources"]:
         name = s["name"]
         if args.source and name != args.source:
@@ -164,15 +277,11 @@ def main():
         if name not in handlers:
             print(f"  {name}: no handler (method={s.get('method')})"); continue
         if args.limit:
-            for k in ("hits_per_query", "questions_per_site", "posts_per_subreddit"):
+            for k in ("hits_per_query", "questions_per_site", "posts_per_subreddit",
+                      "posts_per_tag", "issues_per_repo", "topics_per_forum"):
                 if k in s: s[k] = args.limit
         print(f"[{name}]")
-        if name == "stackexchange":
-            scrape_se(con, s, env)
-        elif name == "reddit":
-            scrape_reddit(con, s, env)
-        else:
-            scrape_hn(con, s)
+        handlers[name](con, s, env)
     total = con.execute("SELECT COUNT(*) FROM raw_posts").fetchone()[0]
     print(f"\nraw_posts total: {total}")
     con.close()
