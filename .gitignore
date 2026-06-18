@@ -1,0 +1,17 @@
+# secrets
+.env
+*.env
+!.env.example
+
+# data + caches (regenerable)
+data/painpoints.db
+data/painpoints.db-*
+data/raw/
+output/drafts/
+output/approved.txt
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/

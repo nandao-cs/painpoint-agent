@@ -1,0 +1,38 @@
+# Each source needs an access method. Reddit/StackExchange/HN have APIs —
+# prefer those over HTML scraping. Read each ToS before enabling.
+sources:
+  - name: reddit
+    method: api            # use PRAW
+    enabled: false         # set true once REDDIT_* creds are in .env
+    subreddits: [sysadmin, cybersecurity, netsec, msp, ITManagers,
+                 AskNetsec, devops, homelab, BlueTeamSec]
+    rate_limit_per_min: 60
+    posts_per_subreddit: 80
+    comments_per_post: 30
+
+  - name: hackernews
+    method: api            # Algolia HN search API, public (no auth)
+    enabled: true
+    queries: ["IT pain", "security tooling", "I wish there was",
+              "sysadmin nightmare", "vulnerability management", "SIEM too expensive"]
+    hits_per_query: 50
+
+  - name: stackexchange
+    method: api            # Security.SE, ServerFault, SuperUser (public, optional key)
+    enabled: true
+    sites: [security, serverfault, superuser]
+    questions_per_site: 80
+    tags: [intrusion-detection, vulnerability, monitoring, active-directory,
+           firewalls, logging, backup, email]
+
+  - name: spiceworks
+    method: scrape         # respect robots.txt
+    enabled: false
+    rate_limit_per_min: 10
+
+  - name: lobsters
+    method: scrape
+    enabled: false
+
+# Add: Gartner Peer Insights, G2 reviews (1-2 star = pain gold),
+#      vendor subreddits, Discord/Slack exports if you have access.

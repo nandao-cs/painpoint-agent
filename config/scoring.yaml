@@ -1,0 +1,17 @@
+min_sources: 8
+lookback_days: 365
+weights:
+  source_count: 0.30        # breadth of complaints
+  recency: 0.15             # still relevant
+  sentiment_intensity: 0.20 # frustration level
+  unmet_need: 0.20          # "no good solution" signals
+  willingness_to_pay: 0.15  # budget / "would pay" mentions
+keyword_signals:
+  unmet_need: ["no good tool", "nothing works", "hacked together",
+               "still doing this manually", "wish there was", "gave up",
+               "no solution", "workaround", "diy", "home grown", "homegrown"]
+  wtp: ["would pay", "budget for", "we pay", "expensive", "worth it",
+        "switched from", "looking to buy", "happy to pay", "shut up and take",
+        "per seat", "per month", "license cost"]
+  frustration: ["frustrating", "nightmare", "hate", "pain", "broken",
+                "useless", "garbage", "fed up", "tired of", "again and again"]
