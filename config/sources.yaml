@@ -11,12 +11,12 @@ sources:
   - name: stackexchange
     method: api            # Security.SE, ServerFault, SuperUser, DevOps, SRE, DBA (public, optional key)
     enabled: true
-    sites: [security, serverfault, superuser, devops, dba]   # 'sre' has no API slug
+    sites: [security, serverfault, superuser, devops, dba, softwareengineering]  # 'sre' has no API slug
     questions_per_site: 80
-    # tag set trimmed to stay under the keyless SE throttle (~one burst). Add
-    # STACKEXCHANGE_KEY to .env to lift the quota and re-expand.
-    tags: [vulnerability, monitoring, active-directory, firewalls,
-           logging, backup, kubernetes, secrets-management]
+    # full tag set — STACKEXCHANGE_KEY in .env lifts quota to 10k/day, no throttle.
+    tags: [intrusion-detection, vulnerability, monitoring, active-directory,
+           firewalls, logging, backup, email, kubernetes, secrets-management,
+           siem, incident-response, compliance, encryption, penetration-test]
 
   - name: lobsters
     method: api            # lobste.rs public JSON, no auth — high-signal infra/security crowd
