@@ -27,10 +27,22 @@ Notion DB) and validated (top-ranked in output/reports/_index.md):
    - **Target Buyer:** who pays (role + company type).
    - **What to Build:** the product wedge / MVP.
    - **Supporting News (Readwise):** the article titles + URLs from step 2.
-4. **Write to Notion** (idempotent — match on Source Painpoints / Thesis title;
-   update if it already exists, else create). Set Status=New, Score and Domain
-   from the pain point, Created=today. Put the full narrative in the page body
-   too (the properties hold the structured fields).
+4. **Score** with the two adoption/pain dimensions (see Scoring below).
+5. **Write to Notion** (idempotent — match on Source Painpoints / Thesis title;
+   update if it already exists, else create). Set Status=New, Domain from the
+   pain point, Created=today, **Base Score**, **Adoption Horizon**, **Pain
+   Imminence**, **Score** (computed), and **AI Trend** (true only for trend-radar
+   theses). Put the full narrative in the page body too.
+
+## Scoring — maximize short→mid adoption + real/imminent pain
+`Score = round(Base Score × HorizonMult × PainMult)`; keep the raw value in **Base Score**.
+- **Adoption Horizon** (when will buyers actually adopt): `Now (0-6mo)` ×1.30 ·
+  `6-18mo` ×1.20 · `18-36mo` ×0.90 · `>36mo` ×0.60
+- **Pain Imminence** (is the pain real today): `Real` ×1.30 · `Imminent` ×1.20 ·
+  `Anticipated` ×0.90 · `Hypothetical` ×0.50
+
+The thesis: the best startups solve a **real or imminent** pain with **near-term**
+adoption. Top scores require BOTH; a far-horizon hypothetical is actively penalized.
 
 ## Rules
 - Never duplicate a thesis for a pain point already in the Notion DB.

@@ -9,9 +9,14 @@ forums and discussion sources, rank them by solvability and market signal, and
 1. DISCOVER  → scrape sources, extract candidate pain points
 2. VALIDATE  → score, dedupe, rank, write briefs.
 2.5 THESIS   → for each NEW strong pain point, synthesize an investment thesis,
-               complement it with current news from Readwise, and write it to
-               the Notion "Investment Theses" DB (agents/thesis.md). Idempotent.
-               STOP after this. Human reviews briefs + theses.
+               complement it with current news from Readwise, score it with the
+               Adoption-Horizon × Pain-Imminence multipliers, and write it to the
+               Notion "Investment Theses" DB (agents/thesis.md). Idempotent.
+2.6 TREND    → AI×Security trend radar: scripts/ai_trends.py computes pain-velocity
+               (lens #1), each rising theme is validated against capital + adoption
+               signals (lens #3), surviving themes become AI-Trend theses; all
+               theses re-scored by the same multipliers. STOP after this.
+               Human reviews briefs + theses.
 3. ENGAGE    → only on explicit human approval per-painpoint, post & monitor
 
 ## Hard rules

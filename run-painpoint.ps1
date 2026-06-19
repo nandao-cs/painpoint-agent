@@ -19,6 +19,11 @@ Log "scrape: pulling sources..."
 & $python "$proj\scripts\scrape.py" 2>&1 | ForEach-Object { Add-Content $log $_ }
 Log "scrape: done"
 
+# --- 1b. refresh AI x security pain-velocity radar (feeds Phase 2.6) ---
+Log "ai_trends: computing..."
+& $python "$proj\scripts\ai_trends.py" 2>&1 | ForEach-Object { Add-Content $log $_ }
+Log "ai_trends: done"
+
 # --- 2. headless pipeline pass (discovery -> thesis -> graph), with retry ---
 $env:ANTHROPIC_API_KEY = $null   # bill to subscription
 $prompt = Get-Content -Raw "$proj\scripts\pipeline-run.md"
