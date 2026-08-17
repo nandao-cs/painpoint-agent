@@ -66,7 +66,20 @@ $prompt = $prompt + (Get-McpDegradationNote)
 # Portfolio guard applies: phase 2.6 validates trend themes against capital signals and
 # can surface named companies into Notion theses, so it needs the never_source rule.
 . "C:\Users\fjmartins\Scripts\ops\portfolio-guard.ps1"
+# Enforced MCP write-capability policy (see file). Added 2026-08-17: this launcher
+# was MISSED when the policy shipped, and it is the one that mattered - unlike the
+# other four unenforced launchers (which load `notion` only), painpoint loads
+# `affinity-official`, so it held unrestricted create_note / create_company /
+# upsert_list_entry_field_values on a Mon+Thu schedule while its own specs say
+# "never touch Affinity" three times. Computed once, outside the retry loop.
+. "C:\Users\fjmartins\Scripts\ops\tool-policy.ps1"
 $prompt = $prompt + (Get-PortfolioGuardNote)
+
+$denied = Get-DeniedTools 'painpoint-agent'
+Log ("Tool policy: grants=[{0}]{1}; {2} write tool(s) denied." -f `
+     (($Global:ToolGrantsUsed -join ',') -replace '^$','none'), `
+     $(if ($Global:ToolGrantIsFallback) { ' FALLBACK-not-in-policy-map' } else { '' }), `
+     $denied.Count)
 $env:ANTHROPIC_API_KEY = $null   # bill to subscription
 Log "Billing routed to Claude subscription."
 
@@ -99,6 +112,9 @@ try {
     try {
       $claudeArgs = @('-p','--permission-mode','bypassPermissions','--output-format','text')
       if ($mcpCfg) { $claudeArgs += @('--mcp-config',$mcpCfg,'--strict-mcp-config') }
+      # Kept LAST in the arg list because --disallowedTools is variadic.
+      $claudeArgs += '--disallowedTools'
+      $claudeArgs += $denied
       $p = Start-Process -FilePath $claude -ArgumentList $claudeArgs `
              -RedirectStandardInput $tin -RedirectStandardOutput $tout -RedirectStandardError $terr -NoNewWindow -PassThru
       try { $job = New-KillOnCloseJob "ClaudeRun_painpointagent_${PID}_a$attempt"; Add-ProcessToJob -JobHandle $job -Process $p }
