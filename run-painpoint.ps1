@@ -53,10 +53,20 @@ Log "ai_trends: done"
 # loading all 13 globally-configured servers when a routine only needs a handful.
 . "C:\Users\fjmartins\Scripts\ops\mcp-scope.ps1"
 $mcpCfg = New-ScopedMcpConfig 'painpoint-agent'
-if ($mcpCfg) { Log "MCP scoped to: $($Global:McpServersNeeded['painpoint-agent'] -join ', ')" }
+if ($mcpCfg) {
+  Log "MCP scoped to: $($Global:McpUsed -join ', ')"
+  if ($Global:McpDropped -and $Global:McpDropped.Count) {
+    Log "MCP UNAVAILABLE this run: $($Global:McpDropped -join ', ') - substitutes and continues (no connector is on the critical path)."
+  }
+}
 else { Log "WARN: MCP scoping returned null -- falling back to full server set." }
 
 $prompt = Get-Content -Raw -Path "$proj\scripts\pipeline-run.md"
+$prompt = $prompt + (Get-McpDegradationNote)
+# Portfolio guard applies: phase 2.6 validates trend themes against capital signals and
+# can surface named companies into Notion theses, so it needs the never_source rule.
+. "C:\Users\fjmartins\Scripts\ops\portfolio-guard.ps1"
+$prompt = $prompt + (Get-PortfolioGuardNote)
 $env:ANTHROPIC_API_KEY = $null   # bill to subscription
 Log "Billing routed to Claude subscription."
 
