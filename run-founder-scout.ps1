@@ -50,6 +50,10 @@ $prompt = Get-Content -Raw "$proj\scripts\founder-scout-run.md"
 # Per-routine MCP server scoping + enforced write-capability policy (see ops\ for both).
 . "C:\Users\fjmartins\Scripts\ops\mcp-scope.ps1"
 . "C:\Users\fjmartins\Scripts\ops\tool-policy.ps1"
+# Proof that the PreToolUse hook is really in force this run (see file).
+# `claude --help`: a --settings file that fails validation is SILENTLY IGNORED,
+# and an ungoverned run logs identically to a governed one.
+. "C:\Users\fjmartins\Scripts\ops\hook-assert.ps1"
 # Portfolio guard: this agent shortlists PEOPLE and writes an Outreach Angle for each, so a
 # candidate who is already a portfolio founder is the same never_contact violation as a cold
 # email. ops\portfolio-registry.json is the authority.
@@ -109,6 +113,12 @@ Log ("Tool policy: grants=[{0}]{1}; {2} write tool(s) denied." -f `
 # so a typo here silently disarms the gate rather than breaking the run.
 $env:BRPX_RUN_ID  = [guid]::NewGuid().ToString()
 $env:BRPX_ROUTINE = 'founder-scout'
+# HOOK ASSERTION (2026-08-22). Two independent checks, both advisory - neither can
+# abort a run, for the same reason ops\prompt-lint.ps1 only warns. The static one
+# runs now; the breadcrumb it refers to is written by ops\executor-hook.js and read
+# back by ops\health-check.ps1, which is what turns a silent disarm into a finding.
+Log (Test-HookSettings)
+Log ("Run id: {0}" -f $(if ($brpxRunId) { $brpxRunId } else { $env:BRPX_RUN_ID }))
 
 # Extra args built as one array: PowerShell expands an array into separate arguments for a
 # native command. --disallowedTools stays LAST because it is variadic.

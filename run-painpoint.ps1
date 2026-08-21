@@ -73,6 +73,10 @@ $prompt = $prompt + (Get-McpDegradationNote)
 # upsert_list_entry_field_values on a Mon+Thu schedule while its own specs say
 # "never touch Affinity" three times. Computed once, outside the retry loop.
 . "C:\Users\fjmartins\Scripts\ops\tool-policy.ps1"
+# Proof that the PreToolUse hook is really in force this run (see file).
+# `claude --help`: a --settings file that fails validation is SILENTLY IGNORED,
+# and an ungoverned run logs identically to a governed one.
+. "C:\Users\fjmartins\Scripts\ops\hook-assert.ps1"
 $prompt = $prompt + (Get-PortfolioGuardNote)
 
 $denied = Get-DeniedTools 'painpoint-agent'
@@ -92,6 +96,34 @@ $gmutex = New-Object System.Threading.Mutex($false, "FunnelAgentRun_${lane}_$env
 $gheld  = $false
 $maxAttempts = 3   # kept at painpoint's existing value (heavier 4-phase pipeline than linkedin-daily's 2)
 $code   = 1
+$unknownOutcome = $false
+
+# --- SCOPED EXECUTOR RUN CONTEXT (added 2026-08-19) -------------------------
+# painpoint-agent was the last routine delivering outside ops/act.py. agents.json
+# recorded `sender_pattern: report\.py` and a note saying it "delivers through
+# `python scripts/report.py`" - but report.py only writes markdown briefs to
+# output/reports/ and sends nothing at all, so the routine declared gmail+telegram
+# delivery and in fact delivered nothing, while ops/prompt-lint.ps1 CHECK 3 passed
+# because that custom pattern matched the report.py line in the spec. Its delivery
+# now goes through act.py like every other routine (spec STEP 7), which needs:
+#   - BRPX_RUN_ID / BRPX_ROUTINE in the ENVIRONMENT (act.py reads them there, never
+#     from its arguments, so a routine cannot forge its identity or reset a counter).
+#     Without them act.py refuses outright with exit 3, "missing run context".
+#   - --settings ops\executor-hook-settings.json, the PreToolUse hook that blocks a
+#     direct send_gmail.py / send_alert.js call and does the per-run gate counting.
+#     This launcher had NO hook, which mattered here more than anywhere: it is the
+#     one routine loading affinity-official.
+# BRPX_RUN_ID is minted ONCE, HERE, outside the retry loop, and reused across all 3
+# attempts on purpose: a fresh id per attempt would reset every per-run cap, which is
+# exactly the bypass closed in the hook on 2026-08-19. A routine that emitted N sends
+# before timing out must not get N more.
+$brpxRunId = [guid]::NewGuid().ToString()
+# HOOK ASSERTION (2026-08-22). Two independent checks, both advisory - neither can
+# abort a run, for the same reason ops\prompt-lint.ps1 only warns. The static one
+# runs now; the breadcrumb it refers to is written by ops\executor-hook.js and read
+# back by ops\health-check.ps1, which is what turns a silent disarm into a finding.
+Log (Test-HookSettings)
+Log ("Run id: {0}" -f $(if ($brpxRunId) { $brpxRunId } else { $env:BRPX_RUN_ID }))
 try {
   $gheld = Wait-LaneMutexOrAbort -Mutex $gmutex -Lane $lane -TaskLabel "agent=painpoint-agent" -LogFn ${function:Log}
   if (-not $gheld) { $code = $Global:LaneAbortExitCode }
@@ -110,19 +142,44 @@ try {
     [IO.File]::WriteAllText($tin, $prompt, (New-Object System.Text.UTF8Encoding($false)))
     $job = $null
     try {
-      $claudeArgs = @('-p','--permission-mode','bypassPermissions','--output-format','text')
+      # Set HERE rather than at launcher startup because the lane-abort Telegram alert in
+      # ops\concurrency.ps1 runs earlier in this same process and must stay ungated.
+      $env:BRPX_RUN_ID  = $brpxRunId
+      $env:BRPX_ROUTINE = 'painpoint-agent'
+      $claudeArgs = @('-p','--settings','C:\Users\fjmartins\Scripts\ops\executor-hook-settings.json','--permission-mode','bypassPermissions','--output-format','text')
       if ($mcpCfg) { $claudeArgs += @('--mcp-config',$mcpCfg,'--strict-mcp-config') }
       # Kept LAST in the arg list because --disallowedTools is variadic.
       $claudeArgs += '--disallowedTools'
       $claudeArgs += $denied
       $p = Start-Process -FilePath $claude -ArgumentList $claudeArgs `
              -RedirectStandardInput $tin -RedirectStandardOutput $tout -RedirectStandardError $terr -NoNewWindow -PassThru
+      # DO NOT REMOVE, and DO NOT MOVE BELOW THE WaitForExit. Start-Process -PassThru hands back
+      # a Process object with no cached handle, so once the child exits $p.ExitCode reads $null -
+      # for SUCCESS and FAILURE alike. Touching .Handle only works while the child is still
+      # alive, so it must run BEFORE the timed WaitForExit, not inside the if-body.
+      #
+      # The codes in Logs\painpoint_agent.log have been REAL: Add-ProcessToJob on the next line
+      # reads $Process.Handle (Scripts\ops\concurrency.ps1:159) and cached it as a SIDE EFFECT.
+      # This line makes that explicit, because the side effect is silently losable - if
+      # New-KillOnCloseJob throws, the catch below sets $job = $null and carries on, and from
+      # there the exit code would be $null and the fallback would forge a success. See
+      # Scripts\fund-routines\run-routine.ps1 for the full write-up and the 2026-08-19
+      # AST-lifted verification.
+      $null = $p.Handle
       try { $job = New-KillOnCloseJob "ClaudeRun_painpointagent_${PID}_a$attempt"; Add-ProcessToJob -JobHandle $job -Process $p }
       catch { Log "WARN: job-object assign failed ($($_.Exception.Message)); falling back to taskkill-only kill."; $job = $null }
       if ($p.WaitForExit($claudeTimeoutMin*60*1000)) {
-        $p.WaitForExit()   # flush race guard: ExitCode can read $null right after WaitForExit returns true
+        $p.WaitForExit()
         $code = $p.ExitCode
-        if ($null -eq $code) { Log "NOTE: process exited but ExitCode read null; treating as success (0) to avoid a false retry."; $code = 0 }
+        if ($null -eq $code) {
+          # Unreachable with the handle cached; if it fires the outcome is UNKNOWN, not success -
+          # forging a 0 here is what hid the 2026-07-16..20 window. 126 is a free sentinel: 0 ok,
+          # 1 launcher error, 124 timeout, 125 is ALREADY $Global:LaneAbortExitCode. No retry:
+          # the pipeline may already have written its briefs/theses and a re-run would duplicate it.
+          Log "ERROR ANOMALY: process exited but ExitCode read null even with handle cached; outcome UNKNOWN, recording 126 and not retrying."
+          $code = 126
+          $unknownOutcome = $true
+        }
         if ($job) { Close-JobHandle -JobHandle $job }
       } else {
         Log "TIMEOUT: claude -p exceeded ${claudeTimeoutMin}min - killing job (all descendants incl. MCP subprocesses)."
@@ -144,7 +201,9 @@ try {
     }
     Remove-Item $tin, $tout, $terr -Force -ErrorAction SilentlyContinue
     Log "pipeline attempt=$attempt exitcode=$code"
-    if ($code -eq 0) { break }
+    # $unknownOutcome is the 126 sentinel: outcome unknown, so retrying risks duplicating briefs
+    # and theses that may already have been written. Every other non-zero code retries as intended.
+    if ($code -eq 0 -or $unknownOutcome) { break }
   }
   }
 } finally {

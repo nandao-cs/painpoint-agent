@@ -28,6 +28,10 @@ $prompt = Get-Content -Raw "$proj\scripts\ideas-run.md"
 # Per-routine MCP server scoping + enforced write-capability policy (see ops\ for both).
 . "C:\Users\fjmartins\Scripts\ops\mcp-scope.ps1"
 . "C:\Users\fjmartins\Scripts\ops\tool-policy.ps1"
+# Proof that the PreToolUse hook is really in force this run (see file).
+# `claude --help`: a --settings file that fails validation is SILENTLY IGNORED,
+# and an ungoverned run logs identically to a governed one.
+. "C:\Users\fjmartins\Scripts\ops\hook-assert.ps1"
 $mcpCfg = New-ScopedMcpConfig 'startup-ideas'
 if ($mcpCfg) {
   Log "MCP scoped to: $($Global:McpUsed -join ', ')"
@@ -59,6 +63,12 @@ Log ("Tool policy: grants=[{0}]{1}; {2} write tool(s) denied." -f `
 # BRPX_RUN_ID is minted ONCE, outside the retry loop, so the 3 attempts share one cap window.
 $env:BRPX_RUN_ID  = [guid]::NewGuid().ToString()
 $env:BRPX_ROUTINE = 'startup-ideas'
+# HOOK ASSERTION (2026-08-22). Two independent checks, both advisory - neither can
+# abort a run, for the same reason ops\prompt-lint.ps1 only warns. The static one
+# runs now; the breadcrumb it refers to is written by ops\executor-hook.js and read
+# back by ops\health-check.ps1, which is what turns a silent disarm into a finding.
+Log (Test-HookSettings)
+Log ("Run id: {0}" -f $(if ($brpxRunId) { $brpxRunId } else { $env:BRPX_RUN_ID }))
 
 # Extra args built as one array: PowerShell expands an array into separate arguments for a
 # native command. --disallowedTools stays LAST because it is variadic.
