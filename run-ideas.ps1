@@ -1,4 +1,5 @@
-# run-ideas.ps1 — Startup Ideation Agent (Task Scheduler entry / on-demand).
+# run-ideas.ps1 — Startup Ideation Agent. SCHEDULED: step 2/3 of run-daily-sequence.ps1,
+# which the PainPointAgent task runs headless Mon + Thu 09:00.
 # Reads the fund's theses + pain points and publishes startup ideas to the
 # Notion Startup Ideas DB. Bills the Claude subscription. Retries on socket drop.
 #

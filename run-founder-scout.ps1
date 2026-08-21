@@ -1,4 +1,5 @@
-# run-founder-scout.ps1 — Founder Scout Agent (on-demand / scheduled).
+# run-founder-scout.ps1 — Founder Scout Agent. SCHEDULED, not on-demand: step 3/3 of
+# run-daily-sequence.ps1, which the PainPointAgent task runs headless Mon + Thu 09:00.
 # For each startup idea with no candidates yet, sources matching people via
 # OpenMandate + Specter + Affinity + Hunter and writes them to the Notion
 # Founder Candidates DB. SOURCE-ONLY: never contacts anyone, never touches Affinity-write.
