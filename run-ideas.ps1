@@ -26,6 +26,9 @@ $env:ANTHROPIC_API_KEY = $null   # bill to subscription
 $prompt = Get-Content -Raw "$proj\scripts\ideas-run.md"
 
 # Per-routine MCP server scoping + enforced write-capability policy (see ops\ for both).
+# Job-Object helpers (New-KillOnCloseJob / Stop-JobTree / Close-JobHandle) for the
+# bounded run below - without them a timeout cannot reap detached MCP children.
+. "C:\Users\fjmartins\Scripts\ops\concurrency.ps1"
 . "C:\Users\fjmartins\Scripts\ops\mcp-scope.ps1"
 . "C:\Users\fjmartins\Scripts\ops\tool-policy.ps1"
 # Proof that the PreToolUse hook is really in force this run (see file).
@@ -78,12 +81,46 @@ $extra += '--disallowedTools'
 $extra += $denied
 
 $code = 1
+# BOUNDED RUN (added 2026-08-22). This launcher used to pipe straight into claude with
+# NO time bound at all. The only backstop was the PainPointAgent task's ExecutionTimeLimit
+# of PT4H - so a wedged MCP server or a dropped socket could burn four hours AND starve the
+# later steps of run-daily-sequence.ps1, which runs painpoint -> ideas -> founder-scout in
+# order. run-painpoint.ps1 has self-limited to 25 minutes for months; these two never did.
+#
+# Same shape as run-painpoint.ps1 deliberately: Start-Process plus a kill-on-close Job Object
+# so detached MCP subprocesses die with the parent, and a timed WaitForExit.
+$claudeTimeoutMin = 25
 for ($attempt = 1; $attempt -le 3; $attempt++) {
   if ($attempt -gt 1) { Log "RETRY $attempt/3 (prev exit=$code)"; Start-Sleep -Seconds 20 }
-  $prompt | & $claude -p --permission-mode bypassPermissions --output-format text $extra 2>&1 |
-    ForEach-Object { Add-Content $log $_ -Encoding utf8 }
-  $code = $LASTEXITCODE
-  if ($code -eq 0) { break }
+  $tin = [IO.Path]::GetTempFileName(); $tout = [IO.Path]::GetTempFileName(); $terr = [IO.Path]::GetTempFileName()
+  [IO.File]::WriteAllText($tin, $prompt, (New-Object System.Text.UTF8Encoding($false)))
+  $job = $null
+  try {
+    $p = Start-Process -FilePath $claude -ArgumentList (@('-p','--permission-mode','bypassPermissions','--output-format','text') + $extra) `
+           -RedirectStandardInput $tin -RedirectStandardOutput $tout -RedirectStandardError $terr -NoNewWindow -PassThru
+    # Touch .Handle BEFORE the timed wait. Start-Process -PassThru returns a Process with no
+    # cached handle, so after exit $p.ExitCode reads $null for SUCCESS and FAILURE alike.
+    $null = $p.Handle
+    try { $job = New-KillOnCloseJob "ClaudeRun_startupideas_${PID}_a$attempt"; Add-ProcessToJob -JobHandle $job -Process $p }
+    catch { Log "WARN: job-object assign failed ($($_.Exception.Message)); taskkill-only fallback."; $job = $null }
+    if ($p.WaitForExit($claudeTimeoutMin*60*1000)) {
+      $p.WaitForExit()
+      $code = $p.ExitCode
+      if ($null -eq $code) { Log "ERROR ANOMALY: exited but ExitCode is null; outcome UNKNOWN, recording 126."; $code = 126 }
+      if ($job) { Close-JobHandle -JobHandle $job }
+    } else {
+      Log "TIMEOUT: claude -p exceeded ${claudeTimeoutMin}min - killing the job tree (incl. MCP subprocesses)."
+      if ($job) { Stop-JobTree -JobHandle $job }
+      & taskkill.exe /PID $p.Id /T /F *> $null
+      $code = 124
+    }
+  }
+  catch { Log "ERROR attempt=$attempt : $($_.Exception.Message)"; $code = 1; if ($job) { try { Close-JobHandle -JobHandle $job } catch {} } }
+  foreach ($tf in @($tout, $terr)) {
+    if (Test-Path $tf) { $c = Get-Content $tf -Raw -ErrorAction SilentlyContinue; if ($c) { Add-Content $log $c -Encoding utf8 } }
+  }
+  Remove-Item $tin, $tout, $terr -Force -ErrorAction SilentlyContinue
+  if ($code -eq 0 -or $code -eq 126) { break }
 }
 if ($mcpCfg) { Remove-Item $mcpCfg -Force -ErrorAction SilentlyContinue }
 Log "===== IDEAS RUN END exit=$code ====="
