@@ -124,92 +124,27 @@ $brpxRunId = [guid]::NewGuid().ToString()
 # back by ops\health-check.ps1, which is what turns a silent disarm into a finding.
 Log (Test-HookSettings)
 Log ("Run id: {0}" -f $(if ($brpxRunId) { $brpxRunId } else { $env:BRPX_RUN_ID }))
-try {
-  $gheld = Wait-LaneMutexOrAbort -Mutex $gmutex -Lane $lane -TaskLabel "agent=painpoint-agent" -LogFn ${function:Log}
-  if (-not $gheld) { $code = $Global:LaneAbortExitCode }
-  else {
+# The launch sequence lives in ops\claude-run.ps1 (2026-08-22): lane mutex, retry
+# loop, job-object kill, handle caching, exit-code discipline, log tee. It was
+# hand-copied into thirteen launchers and drifted; now there is one copy.
+# Behaviour here is unchanged - same 25min timeout, same 3 attempts, same 90s
+# network backoff, same 124/126 rules.
+. "C:\Users\fjmartins\Scripts\ops\claude-run.ps1"
 
-  $claudeTimeoutMin = 25
-  $lastWasNetworkError = $false
-  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    if ($attempt -gt 1) {
-      # 2026-07-23 fix: transient ENOTFOUND blips need real recovery time, not a 20s retry into the same outage.
-      $backoffSec = if ($lastWasNetworkError) { 90 } else { 20 }
-      Log "RETRY attempt $attempt/$maxAttempts (previous exitcode=$code, backoff=${backoffSec}s$(if ($lastWasNetworkError) { ' - network error detected' }))"
-      Start-Sleep -Seconds $backoffSec
-    }
-    $tin = [IO.Path]::GetTempFileName(); $tout = [IO.Path]::GetTempFileName(); $terr = [IO.Path]::GetTempFileName()
-    [IO.File]::WriteAllText($tin, $prompt, (New-Object System.Text.UTF8Encoding($false)))
-    $job = $null
-    try {
-      # Set HERE rather than at launcher startup because the lane-abort Telegram alert in
-      # ops\concurrency.ps1 runs earlier in this same process and must stay ungated.
-      $env:BRPX_RUN_ID  = $brpxRunId
-      $env:BRPX_ROUTINE = 'painpoint-agent'
-      $claudeArgs = @('-p','--settings','C:\Users\fjmartins\Scripts\ops\executor-hook-settings.json','--permission-mode','bypassPermissions','--output-format','text')
-      if ($mcpCfg) { $claudeArgs += @('--mcp-config',$mcpCfg,'--strict-mcp-config') }
-      # Kept LAST in the arg list because --disallowedTools is variadic.
-      $claudeArgs += '--disallowedTools'
-      $claudeArgs += $denied
-      $p = Start-Process -FilePath $claude -ArgumentList $claudeArgs `
-             -RedirectStandardInput $tin -RedirectStandardOutput $tout -RedirectStandardError $terr -NoNewWindow -PassThru
-      # DO NOT REMOVE, and DO NOT MOVE BELOW THE WaitForExit. Start-Process -PassThru hands back
-      # a Process object with no cached handle, so once the child exits $p.ExitCode reads $null -
-      # for SUCCESS and FAILURE alike. Touching .Handle only works while the child is still
-      # alive, so it must run BEFORE the timed WaitForExit, not inside the if-body.
-      #
-      # The codes in Logs\painpoint_agent.log have been REAL: Add-ProcessToJob on the next line
-      # reads $Process.Handle (Scripts\ops\concurrency.ps1:159) and cached it as a SIDE EFFECT.
-      # This line makes that explicit, because the side effect is silently losable - if
-      # New-KillOnCloseJob throws, the catch below sets $job = $null and carries on, and from
-      # there the exit code would be $null and the fallback would forge a success. See
-      # Scripts\fund-routines\run-routine.ps1 for the full write-up and the 2026-08-19
-      # AST-lifted verification.
-      $null = $p.Handle
-      try { $job = New-KillOnCloseJob "ClaudeRun_painpointagent_${PID}_a$attempt"; Add-ProcessToJob -JobHandle $job -Process $p }
-      catch { Log "WARN: job-object assign failed ($($_.Exception.Message)); falling back to taskkill-only kill."; $job = $null }
-      if ($p.WaitForExit($claudeTimeoutMin*60*1000)) {
-        $p.WaitForExit()
-        $code = $p.ExitCode
-        if ($null -eq $code) {
-          # Unreachable with the handle cached; if it fires the outcome is UNKNOWN, not success -
-          # forging a 0 here is what hid the 2026-07-16..20 window. 126 is a free sentinel: 0 ok,
-          # 1 launcher error, 124 timeout, 125 is ALREADY $Global:LaneAbortExitCode. No retry:
-          # the pipeline may already have written its briefs/theses and a re-run would duplicate it.
-          Log "ERROR ANOMALY: process exited but ExitCode read null even with handle cached; outcome UNKNOWN, recording 126 and not retrying."
-          $code = 126
-          $unknownOutcome = $true
-        }
-        if ($job) { Close-JobHandle -JobHandle $job }
-      } else {
-        Log "TIMEOUT: claude -p exceeded ${claudeTimeoutMin}min - killing job (all descendants incl. MCP subprocesses)."
-        if ($job) { Stop-JobTree -JobHandle $job }
-        & taskkill.exe /PID $p.Id /T /F *> $null
-        $code = 124
-      }
-    }
-    catch { Log "ERROR attempt=$attempt : $($_.Exception.Message)"; $code = 1; if ($job) { try { Close-JobHandle -JobHandle $job } catch {} } }
-    $lastWasNetworkError = $false
-    foreach ($tf in @($tout, $terr)) {
-      if (Test-Path $tf) {
-        $c = Get-Content $tf -Raw -ErrorAction SilentlyContinue
-        if ($c) {
-          Add-Content -Path $log -Value $c -Encoding utf8
-          if ($c -match 'ENOTFOUND|Unable to connect to API|ECONNRESET|ETIMEDOUT') { $lastWasNetworkError = $true }
-        }
-      }
-    }
-    Remove-Item $tin, $tout, $terr -Force -ErrorAction SilentlyContinue
-    Log "pipeline attempt=$attempt exitcode=$code"
-    # $unknownOutcome is the 126 sentinel: outcome unknown, so retrying risks duplicating briefs
-    # and theses that may already have been written. Every other non-zero code retries as intended.
-    if ($code -eq 0 -or $unknownOutcome) { break }
-  }
-  }
-} finally {
-  if ($gheld) { try { $gmutex.ReleaseMutex() } catch {} ; Log "Lane mutex released." }
-  $gmutex.Dispose()
-  if ($mcpCfg) { Remove-Item $mcpCfg -Force -ErrorAction SilentlyContinue }
+# Initialised to FAILURE, not 0: the finally always runs, and an uninitialised
+# $code would exit 0 and forge a success out of a crash.
+$code = 1
+try {
+  $r = Invoke-ClaudeRun -Name 'painpoint-agent' -Prompt $prompt `
+         -DeniedTools $denied -McpConfig $mcpCfg `
+         -TimeoutMin 25 -MaxAttempts 3 `
+         -LogFile $log -Logger ${function:Log} `
+         -TaskLabel 'agent=painpoint-agent' `
+         -RunContext @{ BRPX_RUN_ID = $brpxRunId; BRPX_ROUTINE = 'painpoint-agent' }
+  $code = $r.ExitCode
 }
-Log "===== PAINPOINT RUN END exitcode=$code ====="
+finally {
+  if ($mcpCfg) { Remove-Item $mcpCfg -Force -ErrorAction SilentlyContinue }
+  Log "===== PAINPOINT RUN END exitcode=$code ====="
+}
 exit $code

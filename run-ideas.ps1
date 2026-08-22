@@ -63,9 +63,12 @@ Log ("Tool policy: grants=[{0}]{1}; {2} write tool(s) denied." -f `
 # launcher deliberately loads NO vault secrets (see above). Nothing about this needs a
 # credential, which is why adding the hook does not reopen the credential hole closed above.
 #
-# BRPX_RUN_ID is minted ONCE, outside the retry loop, so the 3 attempts share one cap window.
-$env:BRPX_RUN_ID  = [guid]::NewGuid().ToString()
-$env:BRPX_ROUTINE = 'startup-ideas'
+# BRPX_RUN_ID is minted ONCE here so the 3 attempts share one cap window, but it is
+# EXPORTED by Invoke-ClaudeRun after the lane is acquired - see its -RunContext note:
+# with BRPX_RUN_ID visible, the lane-abort Telegram alert would be routed through
+# act.py's gated, counted path, so a run that never started would spend the budget
+# it is reporting it could not use.
+$brpxRunId = [guid]::NewGuid().ToString()
 # HOOK ASSERTION (2026-08-22). Two independent checks, both advisory - neither can
 # abort a run, for the same reason ops\prompt-lint.ps1 only warns. The static one
 # runs now; the breadcrumb it refers to is written by ops\executor-hook.js and read
@@ -73,55 +76,39 @@ $env:BRPX_ROUTINE = 'startup-ideas'
 Log (Test-HookSettings)
 Log ("Run id: {0}" -f $(if ($brpxRunId) { $brpxRunId } else { $env:BRPX_RUN_ID }))
 
-# Extra args built as one array: PowerShell expands an array into separate arguments for a
-# native command. --disallowedTools stays LAST because it is variadic.
-$extra = @('--settings','C:\Users\fjmartins\Scripts\ops\executor-hook-settings.json')
-if ($mcpCfg) { $extra += @('--mcp-config',$mcpCfg,'--strict-mcp-config') }
-$extra += '--disallowedTools'
-$extra += $denied
-
-$code = 1
-# BOUNDED RUN (added 2026-08-22). This launcher used to pipe straight into claude with
-# NO time bound at all. The only backstop was the PainPointAgent task's ExecutionTimeLimit
-# of PT4H - so a wedged MCP server or a dropped socket could burn four hours AND starve the
-# later steps of run-daily-sequence.ps1, which runs painpoint -> ideas -> founder-scout in
-# order. run-painpoint.ps1 has self-limited to 25 minutes for months; these two never did.
+# The launch sequence lives in ops\claude-run.ps1 (2026-08-22). Two things change
+# for this launcher beyond the de-duplication:
 #
-# Same shape as run-painpoint.ps1 deliberately: Start-Process plus a kill-on-close Job Object
-# so detached MCP subprocesses die with the parent, and a timed WaitForExit.
-$claudeTimeoutMin = 25
-for ($attempt = 1; $attempt -le 3; $attempt++) {
-  if ($attempt -gt 1) { Log "RETRY $attempt/3 (prev exit=$code)"; Start-Sleep -Seconds 20 }
-  $tin = [IO.Path]::GetTempFileName(); $tout = [IO.Path]::GetTempFileName(); $terr = [IO.Path]::GetTempFileName()
-  [IO.File]::WriteAllText($tin, $prompt, (New-Object System.Text.UTF8Encoding($false)))
-  $job = $null
-  try {
-    $p = Start-Process -FilePath $claude -ArgumentList (@('-p','--permission-mode','bypassPermissions','--output-format','text') + $extra) `
-           -RedirectStandardInput $tin -RedirectStandardOutput $tout -RedirectStandardError $terr -NoNewWindow -PassThru
-    # Touch .Handle BEFORE the timed wait. Start-Process -PassThru returns a Process with no
-    # cached handle, so after exit $p.ExitCode reads $null for SUCCESS and FAILURE alike.
-    $null = $p.Handle
-    try { $job = New-KillOnCloseJob "ClaudeRun_startupideas_${PID}_a$attempt"; Add-ProcessToJob -JobHandle $job -Process $p }
-    catch { Log "WARN: job-object assign failed ($($_.Exception.Message)); taskkill-only fallback."; $job = $null }
-    if ($p.WaitForExit($claudeTimeoutMin*60*1000)) {
-      $p.WaitForExit()
-      $code = $p.ExitCode
-      if ($null -eq $code) { Log "ERROR ANOMALY: exited but ExitCode is null; outcome UNKNOWN, recording 126."; $code = 126 }
-      if ($job) { Close-JobHandle -JobHandle $job }
-    } else {
-      Log "TIMEOUT: claude -p exceeded ${claudeTimeoutMin}min - killing the job tree (incl. MCP subprocesses)."
-      if ($job) { Stop-JobTree -JobHandle $job }
-      & taskkill.exe /PID $p.Id /T /F *> $null
-      $code = 124
-    }
-  }
-  catch { Log "ERROR attempt=$attempt : $($_.Exception.Message)"; $code = 1; if ($job) { try { Close-JobHandle -JobHandle $job } catch {} } }
-  foreach ($tf in @($tout, $terr)) {
-    if (Test-Path $tf) { $c = Get-Content $tf -Raw -ErrorAction SilentlyContinue; if ($c) { Add-Content $log $c -Encoding utf8 } }
-  }
-  Remove-Item $tin, $tout, $terr -Force -ErrorAction SilentlyContinue
-  if ($code -eq 0 -or $code -eq 126) { break }
+#   1. IT GAINS THE LANE MUTEX. It had none, so it could run a second `claude -p`
+#      beside a heavy fund routine that believed it held the fleet alone.
+#   2. Its timeout path gets Stop-RunOnTimeout. The inline version here was the
+#      pre-2026-08-19 shape - Stop-JobTree, then taskkill on an already-reaped PID.
+#      That is harmless only because this file runs under
+#      $ErrorActionPreference='Continue'; under 'Stop' the same three lines
+#      rewrote 124 as 1 thirty-eight times. Relying on a preference setting to
+#      keep a bug latent is not a fix.
+#
+# The 25min bound itself (added 2026-08-22) is unchanged. Before it this launcher
+# piped straight into claude with NO time bound at all, backstopped only by the
+# PainPointAgent task's PT4H limit - so a wedged MCP server could burn four hours
+# AND starve the later steps of run-daily-sequence.ps1, which runs
+# painpoint -> ideas -> founder-scout in order.
+. "C:\Users\fjmartins\Scripts\ops\claude-run.ps1"
+
+# Initialised to FAILURE, not 0: the finally always runs, and an uninitialised
+# $code would exit 0 and forge a success out of a crash.
+$code = 1
+try {
+  $r = Invoke-ClaudeRun -Name 'startup-ideas' -Prompt $prompt `
+         -DeniedTools $denied -McpConfig $mcpCfg `
+         -TimeoutMin 25 -MaxAttempts 3 `
+         -LogFile $log -Logger ${function:Log} `
+         -TaskLabel 'routine=startup-ideas' `
+         -RunContext @{ BRPX_RUN_ID = $brpxRunId; BRPX_ROUTINE = 'startup-ideas' }
+  $code = $r.ExitCode
 }
-if ($mcpCfg) { Remove-Item $mcpCfg -Force -ErrorAction SilentlyContinue }
-Log "===== IDEAS RUN END exit=$code ====="
+finally {
+  if ($mcpCfg) { Remove-Item $mcpCfg -Force -ErrorAction SilentlyContinue }
+  Log "===== IDEAS RUN END exit=$code ====="
+}
 exit $code
