@@ -19,7 +19,10 @@
 # ============================================================
 $ErrorActionPreference = 'Continue'
 $proj   = "C:\Users\fjmartins\painpoint-agent"
-$claude = "C:\Users\fjmartins\.local\bin\claude.exe"; if (-not (Test-Path $claude)) { $claude = "claude" }
+# NOTE: the claude executable is resolved by ops\claude-run.ps1 ($Global:ClaudeExe),
+# not here. A local $claude was left dangling by the 2026-08-23 refactor and is removed:
+# a stale path variable is an invitation to spawn the model outside the shared core,
+# which is exactly the second launch path agents-validate check 11 fails a launcher for.
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 $logDir = "C:\Users\fjmartins\Scripts\Logs"
 $log    = Join-Path $logDir "painpoint_agent.log"

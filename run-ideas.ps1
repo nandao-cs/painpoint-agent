@@ -10,7 +10,10 @@
 # (those tools do not exist in the session), and notion.create is its only granted capability.
 $ErrorActionPreference = 'Continue'
 $proj   = "C:\Users\fjmartins\painpoint-agent"
-$claude = "C:\Users\fjmartins\.local\bin\claude.exe"
+# NOTE: the claude executable is resolved by ops\claude-run.ps1 ($Global:ClaudeExe),
+# not here. A local $claude was left dangling by the 2026-08-23 refactor and is removed:
+# a stale path variable is an invitation to spawn the model outside the shared core,
+# which is exactly the second launch path agents-validate check 11 fails a launcher for.
 $log    = "C:\Users\fjmartins\Scripts\Logs\startup_ideas.log"
 function Log($m){ $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'; Add-Content $log "[$ts] $m" -Encoding utf8 }
 
