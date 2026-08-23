@@ -1,6 +1,6 @@
 # Teams self-hosting or switching email providers struggle with deliverability, spam handling, and poor support from incumbents.
 
-**Score:** 56.2/100  |  **Domain:** email  |  **Sources:** 1  |  **Evidence:** 3
+**Score:** 53.7/100  |  **Domain:** email  |  **Sources:** 1  |  **Evidence:** 3
 
 ## Why it's strong
 - Breadth: 1 independent sources, 3 evidence items

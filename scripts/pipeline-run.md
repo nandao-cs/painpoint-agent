@@ -15,7 +15,7 @@ Notion IDs:
 STEPS:
 1. DISCOVERY: read raw_posts. Identify NEW strong IT/cyber pain points NOT already in the painpoints table (semantic dedup against existing statements — skip near-duplicates). For each new one: canonical one-sentence statement; domain tag; >=2 real evidence posts (url + <=15-word paraphrase + signal_type unmet/wtp/frustration). Insert: INSERT OR REPLACE INTO painpoints(id,statement,domain,status); INSERT OR IGNORE INTO evidence(...). Skip vendor marketing, solved problems, single-user edge cases. If no genuinely new pain points this run, say so and skip to step 5.
 2. SCORE: run `python scripts/score.py`.
-3. REPORT: run `python scripts/report.py`.
+3. REPORT: run `python scripts/report.py`. This only WRITES the per-painpoint briefs and `_index.md` under `output/reports/` — it is a file generator and sends nothing. Delivery is STEP 7.
 4. THESIS (agents/thesis.md): for each NEW painpoint only — query the Investment Theses DB, SKIP any whose Source Painpoints id already has a thesis. For the rest: complement with READWISE (reader_search_documents, 3-6 recent relevant articles, keep title+url), synthesize the thesis fields, CREATE a Notion page (all properties incl. Domain/Status=New/Source Painpoints/Created=today + full narrative body). Set **Base Score** = the painpoint score; set **Adoption Horizon** + **Pain Imminence**; compute **Score** = the SCORING FORMULA below. Set **AI Trend** = false (these are painpoint-sourced). Then set its **Segment** relation (best-fit of the 12) and **Companies** relation (notion-search the Cyber Funnel data source for the theme; attach up to 6 genuine matches, else leave empty — never force).
 
    **SCORING FORMULA (applies to EVERY thesis — new, trend, and the re-score pass):**
@@ -36,4 +36,23 @@ STEPS:
    - **📞 MUST-CONTACT company** (`classDef contact fill:#dcfce7,stroke:#dc2626,stroke-width:3px,color:#14532d`): a Cyber Funnel company that is (a) attached to a 🔥 HOT thesis AND (b) Stage ∈ {Sourcing/Screening, Reached Out} — i.e. genuinely actionable, not Passed/Tracking/late-stage. Prefix its label with 📞. These are the companies Fernando should really contact. (Passed/Tracking comps keep the plain green company style and a "(passed)"/"(tracking)" note.)
    - **Plain company** (existing green `co` style): everything else.
    Compute both flags from the live Notion data you already read (thesis Score/Horizon/Pain; company Stage + which thesis it's attached to). Legend must read: `🔥 hottest thesis (Now+Real, Score≥70) · ⚡ AI-trend · 📞 contact now (on a hot thesis, early stage) · 🔵 segment · 🟢 company`.
-6. Print a concise summary: NEW pain points, NEW painpoint theses, NEW AI-trend theses (theme + heat + horizon + pain + Score + Notion URL), re-scored count, companies attached, and "no new theses" if none. This is the run output that gets logged.
+6. Print a concise summary: NEW pain points, NEW painpoint theses, NEW AI-trend theses (theme + heat + horizon + pain + Score + Notion URL), re-scored count, companies attached, and "no new theses" if none. This is the run output that gets logged, and the source material for STEP 7.
+
+7. DELIVER — through `ops/act.py`, never by invoking a sender script.
+
+   Deliver per `C:\Users\fjmartins\Scripts\fund-routines\_contract.md` → **Comms delivery**, which is the canonical contract. Write the subject, the HTML body and the Telegram summary to **files** and pass the paths — that is the only UTF-8-safe path (text through argv or a shell redirect is decoded through the legacy console codepage on this machine and silently turns em-dashes, accents and emoji into `?`, and this summary is full of them: 🔥 ⚡ 📞 ×).
+
+   - **Gmail** — `python "C:\Users\fjmartins\Scripts\ops\act.py" send-gmail --subject-file "<subjfile>" --body-file "<bodyfile>" --purpose digest`. Subject: `Pain Point Radar — [YYYY-MM-DD] — [N new theses]`. Body = the STEP 6 summary as HTML: new pain points, new painpoint theses, new AI-trend theses (theme + heat + horizon + pain + Score + hyperlinked Notion URL), re-scored count, companies attached, and the 📞 MUST-CONTACT companies from STEP 5 — those are the actionable item. Say "no new theses this run" plainly when that is the case; send it anyway, the absence is itself the signal.
+   - **Telegram** — `python "C:\Users\fjmartins\Scripts\ops\act.py" telegram --body-file "<tgfile>" --purpose digest`. Concise, under ~3,500 chars: headline counts, the 📞 MUST-CONTACT names, and a pointer to the email for the full detail.
+
+   `act.py` runs `MailSender\send_gmail.py` and `TelegramAgent\send_alert.js` itself, as its own child processes; **invoking either directly is BLOCKED before it executes** by the `ops/executor-hook.js` PreToolUse hook, so there is nothing to gain by trying and no fallback to look for — `act.py` *is* the send path. Do NOT use Superhuman and never send to `Fernando.Martins@brpx.com`.
+
+   **`act.py` counts the caps, in the sending process, keyed on the run id the launcher minted — you do not.** Never keep a send tally in this prompt. Act on its exit code:
+   - **0** — sent, or deliberately suppressed by the executor (which happens when a routine's success-path channels are empty). Suppression is the correct outcome, not a failure: do not retry and do not look for another way out.
+   - **3** — REFUSED on policy grounds. Report the stderr reason **verbatim** in the run output, carry on, and do not attempt another route to the same recipient.
+   - **4** — REFUSED, cap reached. Report the overflow and do not retry.
+   - **5** — the underlying sender failed. Report it and do not retry the same send.
+
+   If the Gmail send fails or is refused, still push the Telegram summary and note the email failure in the run output.
+
+   **On a genuine failure or abort** (Notion unreachable, the DB unreadable, the pipeline unable to complete), send the error the same way with `--purpose error` instead — that purpose is always permitted, on either channel. **Never label a digest as an error to make it send.**

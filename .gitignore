@@ -15,3 +15,11 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# The two data/ files the existing rules miss (2026-08-23). `data/painpoints.db`
+# and `data/raw/` were covered; these were not, so the whole data/ directory
+# showed as untracked and a `git add -A` would have committed the scrape cache
+# and the trend snapshot as if they were source. Both are regenerable by
+# scripts/ai_trends.py and the candidate pass.
+data/ai_trends.json
+data/_existing_candidates.json
